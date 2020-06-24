@@ -167,6 +167,14 @@ public:
         chunkNext_ = chunkHead_;
     }
 
+    //! Reserve enough memory
+    void Reserve(size_t size) {
+        size_t capacity = Capacity();
+        if (size > capacity) {
+            AllocateChunk(RAPIDJSON_ALIGN(size - capacity));
+        }
+    }
+
     //! Computes the total capacity of allocated memory chunks.
     /*! \return total capacity in bytes.
     */
@@ -296,42 +304,10 @@ private:
             }
         }
         // if no existing chunk can satisfy, need to allocate a new chunk
-        if (!baseAllocator_) {
-            ownBaseAllocator_ = baseAllocator_ = RAPIDJSON_NEW(BaseAllocator)();
-        }
-        size_t capacity = chunk_capacity_;
-        if (size > capacity) {
-            capacity = size;
-        }
-        ChunkHeader* chunk = reinterpret_cast<ChunkHeader*>(baseAllocator_->Malloc(RAPIDJSON_ALIGN(sizeof(ChunkHeader)) + capacity));
+        ChunkHeader* chunk = AllocateChunk(size);
         if (!chunk) {
             return false;
         }
-        chunk->capacity = capacity;
-        chunk->size = 0;
-        chunk->next = 0;
-        chunk->prev = 0;
-        if (!chunkNext_) {
-            // first chunk in the list
-            RAPIDJSON_ASSERT(chunkHead_ == 0);
-            RAPIDJSON_ASSERT(chunkTail_ == 0);
-            chunkHead_ = chunkTail_ = chunkNext_ = chunk;
-            return true;
-        }
-        if (!(chunkNext_->next)) {
-            // last chunk in the list
-            RAPIDJSON_ASSERT(chunkNext_ == chunkTail_);
-            chunk->prev = chunkTail_;
-            chunkTail_->next = chunk;
-            chunkTail_ = chunk;
-            chunkNext_ = chunk;
-            return true;
-        }
-        // insert chunk to link list after chunkNext_
-        chunk->next = chunkNext_->next;
-        chunkNext_->next->prev = chunk;
-        chunk->prev = chunkNext_;
-        chunkNext_->next = chunk;
         chunkNext_ = chunk;
         return true;
     }
@@ -348,9 +324,49 @@ private:
         ChunkHeader *prev;  //!< Prev chunk in the linked list.
     };
 
+    //! Allocate new chunk, but do not change chunkNext_
+    ChunkHeader* AllocateChunk(size_t size) {
+        if (!baseAllocator_) {
+            ownBaseAllocator_ = baseAllocator_ = RAPIDJSON_NEW(BaseAllocator)();
+        }
+        size_t capacity = chunk_capacity_;
+        if (size > capacity) {
+            capacity = size;
+        }
+        ChunkHeader* chunk = reinterpret_cast<ChunkHeader*>(baseAllocator_->Malloc(RAPIDJSON_ALIGN(sizeof(ChunkHeader)) + capacity));
+        if (!chunk) {
+            return 0;
+        }
+        chunk->capacity = capacity;
+        chunk->size = 0;
+        chunk->next = 0;
+        chunk->prev = 0;
+        if (!chunkNext_) {
+            // first chunk in the list
+            RAPIDJSON_ASSERT(chunkHead_ == 0);
+            RAPIDJSON_ASSERT(chunkTail_ == 0);
+            chunkHead_ = chunkTail_ = chunkNext_ = chunk; // have to set chunkNext_ since it is the first chunk
+            return chunk;
+        }
+        if (!(chunkNext_->next)) {
+            // last chunk in the list
+            RAPIDJSON_ASSERT(chunkNext_ == chunkTail_);
+            chunk->prev = chunkTail_;
+            chunkTail_->next = chunk;
+            chunkTail_ = chunk;
+            return chunk;
+        }
+        // insert chunk to link list after chunkNext_
+        chunk->next = chunkNext_->next;
+        chunkNext_->next->prev = chunk;
+        chunk->prev = chunkNext_;
+        chunkNext_->next = chunk;
+        return chunk;
+    }
+
     ChunkHeader *chunkHead_;    //!< Head of the chunk linked-list.
     ChunkHeader *chunkNext_;    //!< Next available chunk in the linked-list. Only the next chunk serves allocation.
-    ChunkHeader *chunkTail_;    //!< Tail of hte chunk linked-list.
+    ChunkHeader *chunkTail_;    //!< Tail of the chunk linked-list.
     size_t chunk_capacity_;     //!< The minimum capacity of chunk when they are allocated.
     void *userBuffer_;          //!< User supplied buffer.
     BaseAllocator* baseAllocator_;  //!< base allocator for allocating memory chunks.
