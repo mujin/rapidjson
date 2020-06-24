@@ -117,7 +117,15 @@ public:
 #pragma GCC diagnostic pop
 #endif
 
+// Not using noexcept for testing RAPIDJSON_ASSERT()
+#define RAPIDJSON_HAS_CXX11_NOEXCEPT 0
+
+#ifndef RAPIDJSON_ASSERT
 #define RAPIDJSON_ASSERT(x) (!(x) ? throw AssertException(RAPIDJSON_STRINGIFY(x)) : (void)0u)
+#ifndef RAPIDJSON_ASSERT_THROWS
+#define RAPIDJSON_ASSERT_THROWS
+#endif
+#endif
 
 class Random {
 public:
