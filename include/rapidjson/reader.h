@@ -535,7 +535,7 @@ template<> inline void SkipWhitespace(EncodedInputStream<UTF8<>, MemoryStream>& 
     \tparam TargetEncoding Encoding of the parse output.
     \tparam StackAllocator Allocator type for stack.
 */
-template <typename SourceEncoding, typename TargetEncoding, typename StackAllocator = CrtAllocator>
+template <typename SourceEncoding, typename TargetEncoding, typename StackAllocator = MemoryPoolAllocator<> >
 class GenericReader {
 public:
     typedef typename SourceEncoding::Ch Ch; //!< SourceEncoding character type

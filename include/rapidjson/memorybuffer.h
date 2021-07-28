@@ -33,7 +33,7 @@ RAPIDJSON_NAMESPACE_BEGIN
     \tparam Allocator type for allocating memory buffer.
     \note implements Stream concept
 */
-template <typename Allocator = CrtAllocator>
+template <typename Allocator = MemoryPoolAllocator<> >
 struct GenericMemoryBuffer {
     typedef char Ch; // byte
 

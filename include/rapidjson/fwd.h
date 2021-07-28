@@ -58,7 +58,7 @@ typedef GenericInsituStringStream<UTF8<char> > InsituStringStream;
 template <typename Encoding, typename Allocator>
 class GenericStringBuffer;
 
-typedef GenericStringBuffer<UTF8<char>, CrtAllocator> StringBuffer;
+typedef GenericStringBuffer<UTF8<char>, MemoryPoolAllocator<CrtAllocator> > StringBuffer;
 
 // filereadstream.h
 
@@ -73,7 +73,7 @@ class FileWriteStream;
 template <typename Allocator>
 struct GenericMemoryBuffer;
 
-typedef GenericMemoryBuffer<CrtAllocator> MemoryBuffer;
+typedef GenericMemoryBuffer<MemoryPoolAllocator<CrtAllocator> > MemoryBuffer;
 
 // memorystream.h
 
@@ -87,7 +87,7 @@ struct BaseReaderHandler;
 template <typename SourceEncoding, typename TargetEncoding, typename StackAllocator>
 class GenericReader;
 
-typedef GenericReader<UTF8<char>, UTF8<char>, CrtAllocator> Reader;
+typedef GenericReader<UTF8<char>, UTF8<char>, MemoryPoolAllocator<CrtAllocator> > Reader;
 
 // writer.h
 
@@ -118,14 +118,14 @@ typedef GenericValue<UTF8<char>, MemoryPoolAllocator<CrtAllocator> > Value;
 template <typename Encoding, typename Allocator, typename StackAllocator>
 class GenericDocument;
 
-typedef GenericDocument<UTF8<char>, MemoryPoolAllocator<CrtAllocator>, CrtAllocator> Document;
+typedef GenericDocument<UTF8<char>, MemoryPoolAllocator<CrtAllocator>, MemoryPoolAllocator<CrtAllocator> > Document;
 
 // pointer.h
 
 template <typename ValueType, typename Allocator>
 class GenericPointer;
 
-typedef GenericPointer<Value, CrtAllocator> Pointer;
+typedef GenericPointer<Value, MemoryPoolAllocator<CrtAllocator> > Pointer;
 
 // schema.h
 
@@ -135,7 +135,7 @@ class IGenericRemoteSchemaDocumentProvider;
 template <typename ValueT, typename Allocator>
 class GenericSchemaDocument;
 
-typedef GenericSchemaDocument<Value, CrtAllocator> SchemaDocument;
+typedef GenericSchemaDocument<Value, MemoryPoolAllocator<CrtAllocator> > SchemaDocument;
 typedef IGenericRemoteSchemaDocumentProvider<SchemaDocument> IRemoteSchemaDocumentProvider;
 
 template <
@@ -144,7 +144,7 @@ template <
     typename StateAllocator>
 class GenericSchemaValidator;
 
-typedef GenericSchemaValidator<SchemaDocument, BaseReaderHandler<UTF8<char>, void>, CrtAllocator> SchemaValidator;
+typedef GenericSchemaValidator<SchemaDocument, BaseReaderHandler<UTF8<char>, void>, MemoryPoolAllocator<CrtAllocator> > SchemaValidator;
 
 RAPIDJSON_NAMESPACE_END
 

@@ -1315,7 +1315,7 @@ public:
     \tparam ValueT Type of JSON value (e.g. \c Value ), which also determine the encoding.
     \tparam Allocator Allocator type for allocating memory of this document.
 */
-template <typename ValueT, typename Allocator = CrtAllocator>
+template <typename ValueT, typename Allocator = MemoryPoolAllocator<> >
 class GenericSchemaDocument {
 public:
     typedef ValueT ValueType;
@@ -1565,7 +1565,7 @@ typedef IGenericRemoteSchemaDocumentProvider<SchemaDocument> IRemoteSchemaDocume
 template <
     typename SchemaDocumentType,
     typename OutputHandler = BaseReaderHandler<typename SchemaDocumentType::SchemaType::EncodingType>,
-    typename StateAllocator = CrtAllocator>
+    typename StateAllocator = MemoryPoolAllocator<> >
 class GenericSchemaValidator :
     public internal::ISchemaStateFactory<typename SchemaDocumentType::SchemaType>, 
     public internal::ISchemaValidator
@@ -1960,7 +1960,7 @@ template <
     typename InputStream,
     typename SourceEncoding,
     typename SchemaDocumentType = SchemaDocument,
-    typename StackAllocator = CrtAllocator>
+    typename StackAllocator = MemoryPoolAllocator<> >
 class SchemaValidatingReader {
 public:
     typedef typename SchemaDocumentType::PointerType PointerType;

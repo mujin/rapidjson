@@ -87,7 +87,7 @@ enum WriteFlag {
     \tparam StackAllocator Type of allocator for allocating memory of stack.
     \note implements Handler concept
 */
-template<typename OutputStream, typename SourceEncoding = UTF8<>, typename TargetEncoding = UTF8<>, typename StackAllocator = CrtAllocator, unsigned writeFlags = kWriteDefaultFlags>
+template<typename OutputStream, typename SourceEncoding = UTF8<>, typename TargetEncoding = UTF8<>, typename StackAllocator = MemoryPoolAllocator<>, unsigned writeFlags = kWriteDefaultFlags>
 class Writer {
 public:
     typedef typename SourceEncoding::Ch Ch;
