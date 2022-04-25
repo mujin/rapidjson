@@ -62,13 +62,13 @@ concept Allocator {
 class CrtAllocator {
 public:
     static const bool kNeedFree = true;
-    void* Malloc(size_t size) { 
+    virtual void* Malloc(size_t size) {
         if (size) //  behavior of malloc(0) is implementation defined.
             return std::malloc(size);
         else
             return NULL; // standardize to returning NULL.
     }
-    void* Realloc(void* originalPtr, size_t originalSize, size_t newSize) {
+    virtual void* Realloc(void* originalPtr, size_t originalSize, size_t newSize) {
         (void)originalSize;
         if (newSize == 0) {
             std::free(originalPtr);
