@@ -49,7 +49,7 @@ public:
         }
     }
 
-protected:
+private:
     std::array<char, BufferSize> _stackBuffer;
     ActualAllocator _actualAllocator;
 
@@ -62,18 +62,14 @@ protected:
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// Looks like a MemoryPoolAllocator, but it carries with it its own heap-allocated buffer.
-template <typename ActualAllocator = rapidjson::MemoryPoolAllocator<>>
-class HeapPoolAllocator final : public rapidjson::CrtAllocator {
+// Basically MemoryPoolAllocator, but it comes with its own buffer
+template <typename BaseAllocator = CrtAllocator, unsigned int BufferSize = 1024 * 16>
+class HeapPoolAllocator final : public rapidjson::MemoryPoolAllocator<BaseAllocator> {
 public:
-    static const bool kNeedFree = ActualAllocator::kNeedFree;
+    static const unsigned int kBuiltInBufferSize = BufferSize;
+    static const bool kNeedFree = rapidjson::MemoryPoolAllocator<BaseAllocator>::kNeedFree;
 
-    HeapPoolAllocator() : HeapPoolAllocator(1024 * 16) {}
-
-    HeapPoolAllocator(size_t startingSize)
-        : rapidjson::CrtAllocator()
-        , _heapBuffer(startingSize, 0)
-        , _actualAllocator(_heapBuffer.data(), startingSize) {}
+    HeapPoolAllocator() : rapidjson::MemoryPoolAllocator<BaseAllocator>(_stackBuffer.data(), _stackBuffer.size()) {}
 
     HeapPoolAllocator(const HeapPoolAllocator&) = delete; // Disallow copying
 
@@ -81,30 +77,8 @@ public:
 
     virtual ~HeapPoolAllocator() {}
 
-    // Concept allocator
-    inline virtual void* Malloc(size_t size) override final {
-        return _actualAllocator.Malloc(size);
-    }
-
-    inline virtual void* Realloc(void* originalPtr, size_t originalSize, size_t newSize) override final {
-        return _actualAllocator.Realloc(originalPtr, originalSize, newSize);
-    }
-
-    static void Free(void* ptr) {
-        ActualAllocator::Free(ptr);
-    }
-
-    void Clear() {
-        _actualAllocator.Clear();
-    }
-
-    ActualAllocator& GetUnderlyingAllocator() {
-        return _actualAllocator;
-    }
-
-protected:
-    std::vector<char> _heapBuffer;
-    ActualAllocator _actualAllocator;
+private:
+    std::array<char, BufferSize> _stackBuffer;
 };
 
 RAPIDJSON_NAMESPACE_END
