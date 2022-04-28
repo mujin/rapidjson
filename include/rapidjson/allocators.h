@@ -172,7 +172,7 @@ public:
     MemoryPoolAllocator(size_t chunkSize = kDefaultChunkCapacity, BaseAllocator* baseAllocator = 0) : 
         chunk_capacity_(chunkSize),
         baseAllocator_(baseAllocator ? baseAllocator : RAPIDJSON_NEW(BaseAllocator)()),
-        shared_(static_cast<SharedData*>(baseAllocator_ ? baseAllocator_->Malloc(SIZEOF_SHARED_DATA + SIZEOF_CHUNK_HEADER) : 0))
+        shared_(static_cast<SharedData*>(baseAllocator_ ? baseAllocator_->Malloc(SIZEOF_SHARED_DATA + SIZEOF_CHUNK_HEADER + chunkSize) : 0))
     {
         RAPIDJSON_ASSERT(baseAllocator_ != 0);
         RAPIDJSON_ASSERT(shared_ != 0);
@@ -183,7 +183,7 @@ public:
             shared_->ownBaseAllocator = baseAllocator_;
         }
         shared_->chunkHead = GetChunkHead(shared_);
-        shared_->chunkHead->capacity = 0;
+        shared_->chunkHead->capacity = chunkSize;
         shared_->chunkHead->size = 0;
         shared_->chunkHead->next = 0;
         shared_->chunkHead->prev = 0;
