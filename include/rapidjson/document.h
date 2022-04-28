@@ -2785,6 +2785,10 @@ public:
     //! Get the capacity of stack in bytes.
     size_t GetStackCapacity() const { return stack_.GetCapacity(); }
 
+    StackAllocatorType& GetStackAllocator() {
+        return stack_.GetAllocator();
+    }
+
 private:
     // clear stack on any exit from ParseStream, e.g. due to exception
     struct ClearStackOnExit {
