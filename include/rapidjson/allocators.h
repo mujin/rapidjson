@@ -82,7 +82,7 @@ concept Allocator {
 class CrtAllocator {
 public:
     static const bool kNeedFree = true;
-    void* Malloc(size_t size) { 
+    void* Malloc(size_t size) {
         if (size) //  behavior of malloc(0) is implementation defined.
             return RAPIDJSON_MALLOC(size);
         else
@@ -104,6 +104,8 @@ public:
     bool operator!=(const CrtAllocator&) const RAPIDJSON_NOEXCEPT {
         return false;
     }
+
+    void Clear() RAPIDJSON_NOEXCEPT {}
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -128,16 +130,19 @@ public:
 template <typename BaseAllocator = CrtAllocator>
 class MemoryPoolAllocator {
     //! Chunk header for perpending to each chunk.
-    /*! Chunks are stored as a singly linked list.
+    /*! Chunks are stored as a doubly linked list.
     */
     struct ChunkHeader {
         size_t capacity;    //!< Capacity of the chunk in bytes (excluding the header itself).
         size_t size;        //!< Current size of allocated memory in bytes.
         ChunkHeader *next;  //!< Next chunk in the linked list.
+        ChunkHeader *prev;  //!< Prev chunk in the linked list.
     };
 
     struct SharedData {
-        ChunkHeader *chunkHead;  //!< Head of the chunk linked-list. Only the head chunk serves allocation.
+        ChunkHeader *chunkHead;  //!< Head of the chunk linked-list.
+        ChunkHeader *chunkNext;  //!< Next available chunk in the linked-list. Only the next chunk serves allocation.
+        ChunkHeader *chunkTail;  //!< Tail of the chunk linked-list.
         BaseAllocator* ownBaseAllocator; //!< base allocator created by this object.
         size_t refcount;
         bool ownBuffer;
@@ -152,7 +157,7 @@ class MemoryPoolAllocator {
     }
     static inline uint8_t *GetChunkBuffer(SharedData *shared)
     {
-        return reinterpret_cast<uint8_t*>(shared->chunkHead) + SIZEOF_CHUNK_HEADER;
+        return reinterpret_cast<uint8_t*>(shared->chunkNext) + SIZEOF_CHUNK_HEADER;
     }
 
     static const size_t kDefaultChunkCapacity = RAPIDJSON_ALLOCATOR_DEFAULT_CHUNK_CAPACITY; //!< Default chunk capacity.
@@ -169,7 +174,7 @@ public:
     MemoryPoolAllocator(size_t chunkSize = kDefaultChunkCapacity, BaseAllocator* baseAllocator = 0) : 
         chunk_capacity_(chunkSize),
         baseAllocator_(baseAllocator ? baseAllocator : RAPIDJSON_NEW(BaseAllocator)()),
-        shared_(static_cast<SharedData*>(baseAllocator_ ? baseAllocator_->Malloc(SIZEOF_SHARED_DATA + SIZEOF_CHUNK_HEADER) : 0))
+        shared_(static_cast<SharedData*>(baseAllocator_ ? baseAllocator_->Malloc(SIZEOF_SHARED_DATA + SIZEOF_CHUNK_HEADER + chunkSize) : 0))
     {
         RAPIDJSON_ASSERT(baseAllocator_ != 0);
         RAPIDJSON_ASSERT(shared_ != 0);
@@ -180,9 +185,12 @@ public:
             shared_->ownBaseAllocator = baseAllocator_;
         }
         shared_->chunkHead = GetChunkHead(shared_);
-        shared_->chunkHead->capacity = 0;
+        shared_->chunkHead->capacity = chunkSize;
         shared_->chunkHead->size = 0;
         shared_->chunkHead->next = 0;
+        shared_->chunkHead->prev = 0;
+        shared_->chunkNext = shared_->chunkHead;
+        shared_->chunkTail = shared_->chunkHead;
         shared_->ownBuffer = true;
         shared_->refcount = 1;
     }
@@ -207,6 +215,9 @@ public:
         shared_->chunkHead->capacity = size - SIZEOF_SHARED_DATA - SIZEOF_CHUNK_HEADER;
         shared_->chunkHead->size = 0;
         shared_->chunkHead->next = 0;
+        shared_->chunkHead->prev = 0;
+        shared_->chunkNext = shared_->chunkHead;
+        shared_->chunkTail = shared_->chunkHead;
         shared_->ownBaseAllocator = 0;
         shared_->ownBuffer = false;
         shared_->refcount = 1;
@@ -264,7 +275,7 @@ public:
             --shared_->refcount;
             return;
         }
-        Clear();
+        Release();
         BaseAllocator *a = shared_->ownBaseAllocator;
         if (shared_->ownBuffer) {
             baseAllocator_->Free(shared_);
@@ -273,17 +284,37 @@ public:
     }
 
     //! Deallocates all memory chunks, excluding the first/user one.
+    void Release() RAPIDJSON_NOEXCEPT {
+        RAPIDJSON_NOEXCEPT_ASSERT(shared_->refcount > 0);
+
+        ChunkHeader *chunkFirst = GetChunkHead(shared_);
+        while (shared_->chunkTail != chunkFirst) {
+            ChunkHeader* prev = shared_->chunkTail->prev;
+            baseAllocator_->Free(shared_->chunkTail);
+            shared_->chunkTail = prev;
+        }
+        shared_->chunkNext = shared_->chunkHead = shared_->chunkTail;
+
+        RAPIDJSON_NOEXCEPT_ASSERT(shared_->chunkHead->prev == 0);
+        shared_->chunkHead->next = 0;
+        shared_->chunkHead->size = 0;
+    }
+
+    //! Release all memory chunks, allowing them to be reused
     void Clear() RAPIDJSON_NOEXCEPT {
         RAPIDJSON_NOEXCEPT_ASSERT(shared_->refcount > 0);
-        for (;;) {
-            ChunkHeader* c = shared_->chunkHead;
-            if (!c->next) {
-                break;
-            }
-            shared_->chunkHead = c->next;
-            baseAllocator_->Free(c);
+        for (ChunkHeader* c = shared_->chunkHead; c != 0; c = c->next) {
+            c->size = 0;
         }
-        shared_->chunkHead->size = 0;
+        shared_->chunkNext = shared_->chunkHead;
+    }
+
+    //! Reserve enough memory
+    void Reserve(size_t size) RAPIDJSON_NOEXCEPT {
+        size_t capacity = Capacity();
+        if (size > capacity) {
+            AllocateChunk(RAPIDJSON_ALIGN(size - capacity));
+        }
     }
 
     //! Computes the total capacity of allocated memory chunks.
@@ -292,8 +323,9 @@ public:
     size_t Capacity() const RAPIDJSON_NOEXCEPT {
         RAPIDJSON_NOEXCEPT_ASSERT(shared_->refcount > 0);
         size_t capacity = 0;
-        for (ChunkHeader* c = shared_->chunkHead; c != 0; c = c->next)
+        for (ChunkHeader* c = shared_->chunkHead; c != 0; c = c->next) {
             capacity += c->capacity;
+        }
         return capacity;
     }
 
@@ -303,8 +335,12 @@ public:
     size_t Size() const RAPIDJSON_NOEXCEPT {
         RAPIDJSON_NOEXCEPT_ASSERT(shared_->refcount > 0);
         size_t size = 0;
-        for (ChunkHeader* c = shared_->chunkHead; c != 0; c = c->next)
+        for (ChunkHeader* c = shared_->chunkHead; c != 0; c = c->next) {
             size += c->size;
+            if (c == shared_->chunkNext) {
+                break; // the rest will be zeros
+            }
+        }
         return size;
     }
 
@@ -319,52 +355,58 @@ public:
     //! Allocates a memory block. (concept Allocator)
     void* Malloc(size_t size) {
         RAPIDJSON_NOEXCEPT_ASSERT(shared_->refcount > 0);
-        if (!size)
+        if (!size) {
             return NULL;
+        }
 
         size = RAPIDJSON_ALIGN(size);
-        if (RAPIDJSON_UNLIKELY(shared_->chunkHead->size + size > shared_->chunkHead->capacity))
-            if (!AddChunk(chunk_capacity_ > size ? chunk_capacity_ : size))
-                return NULL;
+        if (!EnsureChunk(size)) {
+            return NULL;
+        }
 
-        void *buffer = GetChunkBuffer(shared_) + shared_->chunkHead->size;
-        shared_->chunkHead->size += size;
+        void *buffer = GetChunkBuffer(shared_) + shared_->chunkNext->size;
+        shared_->chunkNext->size += size;
         return buffer;
     }
 
     //! Resizes a memory block (concept Allocator)
     void* Realloc(void* originalPtr, size_t originalSize, size_t newSize) {
-        if (originalPtr == 0)
+        if (originalPtr == 0) {
             return Malloc(newSize);
+        }
 
         RAPIDJSON_NOEXCEPT_ASSERT(shared_->refcount > 0);
-        if (newSize == 0)
+        if (newSize == 0) {
             return NULL;
+        }
 
         originalSize = RAPIDJSON_ALIGN(originalSize);
         newSize = RAPIDJSON_ALIGN(newSize);
 
         // Do not shrink if new size is smaller than original
-        if (originalSize >= newSize)
+        if (originalSize >= newSize) {
             return originalPtr;
+        }
 
         // Simply expand it if it is the last allocation and there is sufficient space
-        if (originalPtr == GetChunkBuffer(shared_) + shared_->chunkHead->size - originalSize) {
+        if (originalPtr == GetChunkBuffer(shared_) + shared_->chunkNext->size - originalSize) {
             size_t increment = static_cast<size_t>(newSize - originalSize);
-            if (shared_->chunkHead->size + increment <= shared_->chunkHead->capacity) {
-                shared_->chunkHead->size += increment;
+            if (shared_->chunkNext->size + increment <= shared_->chunkNext->capacity) {
+                shared_->chunkNext->size += increment;
                 return originalPtr;
             }
         }
 
         // Realloc process: allocate and copy memory, do not free original buffer.
         if (void* newBuffer = Malloc(newSize)) {
-            if (originalSize)
+            if (originalSize) {
                 std::memcpy(newBuffer, originalPtr, originalSize);
+            }
             return newBuffer;
         }
-        else
+        else {
             return NULL;
+        }
     }
 
     //! Frees a memory block (concept Allocator)
@@ -386,18 +428,87 @@ private:
     /*! \param capacity Capacity of the chunk in bytes.
         \return true if success.
     */
-    bool AddChunk(size_t capacity) {
-        if (!baseAllocator_)
-            shared_->ownBaseAllocator = baseAllocator_ = RAPIDJSON_NEW(BaseAllocator)();
-        if (ChunkHeader* chunk = static_cast<ChunkHeader*>(baseAllocator_->Malloc(SIZEOF_CHUNK_HEADER + capacity))) {
-            chunk->capacity = capacity;
-            chunk->size = 0;
-            chunk->next = shared_->chunkHead;
-            shared_->chunkHead = chunk;
+    bool EnsureChunk(size_t size) {
+        RAPIDJSON_ASSERT(shared_->chunkNext != 0); // there is always at least one chunk
+        // check if chunk is big enough
+        if (shared_->chunkNext->size + size <= shared_->chunkNext->capacity) {
             return true;
         }
-        else
+        // search for for a big enough chunk that we already had before
+        for (ChunkHeader* c = shared_->chunkNext->next; c != 0; c = c->next) {
+            if (c->size + size > c->capacity) {
+                // not big enough, continue
+                continue;
+            }
+            if (c == shared_->chunkNext->next) {
+                // found the chunk as the next in list
+                shared_->chunkNext = c;
+                return true;
+            }
+            // found a usable chunk, but somewhere later in the list
+            // re-arrange the link list so that it becomes the next chunk
+            // remove chunk from link list
+            RAPIDJSON_ASSERT(c != shared_->chunkHead);
+            RAPIDJSON_ASSERT(c->prev != 0);
+            c->prev->next = c->next;
+            if (c->next) {
+                RAPIDJSON_ASSERT(c != shared_->chunkTail);
+                c->next->prev = c->prev;
+            } else {
+                shared_->chunkTail = c->prev;
+                RAPIDJSON_ASSERT(c == shared_->chunkTail);
+            }
+            c->prev = c->next = 0;
+            // add chunk to link list after shared_->chunkNext
+            RAPIDJSON_ASSERT(shared_->chunkNext->next != 0);
+            c->next = shared_->chunkNext->next;
+            shared_->chunkNext->next->prev = c;
+            c->prev = shared_->chunkNext;
+            shared_->chunkNext->next = c;
+            shared_->chunkNext = c;
+            return true;
+        }
+        // if no existing chunk can satisfy, need to allocate a new chunk
+        ChunkHeader* chunk = AllocateChunk(size);
+        if (!chunk) {
             return false;
+        }
+        shared_->chunkNext = chunk;
+        return true;
+    }
+
+    //! Allocate new chunk, but do not change shared_->chunkNext
+    ChunkHeader* AllocateChunk(size_t size) {
+        if (!baseAllocator_) {
+            shared_->ownBaseAllocator = baseAllocator_ = RAPIDJSON_NEW(BaseAllocator)();
+        }
+        size_t capacity = chunk_capacity_;
+        if (size > capacity) {
+            capacity = size;
+        }
+        ChunkHeader* chunk = static_cast<ChunkHeader*>(baseAllocator_->Malloc(SIZEOF_CHUNK_HEADER + capacity));
+        if (!chunk) {
+            return 0;
+        }
+        chunk->capacity = capacity;
+        chunk->size = 0;
+        chunk->next = 0;
+        chunk->prev = 0;
+        RAPIDJSON_ASSERT(shared_->chunkNext != 0); // there is always at least one chunk
+        if (shared_->chunkNext->next == 0) {
+            // last chunk in the list
+            RAPIDJSON_ASSERT(shared_->chunkNext == shared_->chunkTail);
+            chunk->prev = shared_->chunkTail;
+            shared_->chunkTail->next = chunk;
+            shared_->chunkTail = chunk;
+            return chunk;
+        }
+        // insert chunk to link list after shared_->chunkNext
+        chunk->next = shared_->chunkNext->next;
+        shared_->chunkNext->next->prev = chunk;
+        chunk->prev = shared_->chunkNext;
+        shared_->chunkNext->next = chunk;
+        return chunk;
     }
 
     static inline void* AlignBuffer(void* buf, size_t &size)
@@ -418,7 +529,6 @@ private:
     BaseAllocator* baseAllocator_;  //!< base allocator for allocating memory chunks.
     SharedData *shared_;        //!< The shared data of the allocator
 };
-
 namespace internal {
     template<typename, typename = void>
     struct IsRefCounted :
