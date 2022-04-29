@@ -104,6 +104,8 @@ public:
     bool operator!=(const CrtAllocator&) const RAPIDJSON_NOEXCEPT {
         return false;
     }
+
+    void Clear() RAPIDJSON_NOEXCEPT {}
 };
 
 ///////////////////////////////////////////////////////////////////////////////
