@@ -24,6 +24,7 @@
 #include "encodedstream.h"
 #include <new>      // placement new
 #include <limits>
+#include <unordered_map>
 
 RAPIDJSON_DIAG_PUSH
 #ifdef _MSC_VER
@@ -52,6 +53,10 @@ RAPIDJSON_DIAG_OFF(terminate) // ignore throwing RAPIDJSON_ASSERT in RAPIDJSON_N
 #include <utility> // std::move
 #endif
 
+#if __cplusplus >= 201703L
+#include <string_view>
+#endif
+
 RAPIDJSON_NAMESPACE_BEGIN
 
 // Forward declaration.
@@ -71,6 +76,36 @@ template <typename Encoding, typename Allocator>
 struct GenericMember { 
     GenericValue<Encoding, Allocator> name;     //!< name of member (must be a string)
     GenericValue<Encoding, Allocator> value;    //!< value of member.
+};
+
+// C++ standard library compatible allocator shim for the rapidjson allocator
+template <typename T, typename Allocator>
+struct CxxAllocatorWrapper
+{
+    using value_type = T;
+    CxxAllocatorWrapper(Allocator* rapidjsonAllocator) noexcept
+        : _allocator(rapidjsonAllocator)
+    {
+    }
+
+    T* allocate(std::size_t n)
+    {
+        T* ptr = static_cast<T*>(_allocator->Malloc(n * sizeof(T)));
+        return ptr;
+    }
+
+    template <typename U>
+    CxxAllocatorWrapper(const CxxAllocatorWrapper<U, Allocator>& other)
+        : _allocator(other._allocator)
+    {
+    }
+
+    void deallocate(T* p, __attribute__((unused)) std::size_t n)
+    {
+        _allocator->Free(p);
+    }
+
+    Allocator* const _allocator;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -534,6 +569,57 @@ struct TypeHelper<ValueType, typename ValueType::ConstObject> {
 template <bool, typename> class GenericArray;
 template <bool, typename> class GenericObject;
 
+// If we don't have access to std::string view, create our own wrapper struct
+#if __cplusplus < 201703L
+template <typename Ch>
+struct StringView {
+    StringView(const Ch* str)
+        : str_(str) {
+    }
+
+    bool operator==(const StringView& other) const {
+        const Ch* s1 = str_;
+        const Ch* s2 = other.str_;
+
+        // While both strings are non-\0, check to see chars match. If not, unequal.
+        while (*s1 && *s2) {
+            if (!std::char_traits<Ch>::eq(*s1, *s2)) {
+                return false;
+            }
+            s1++;
+            s2++;
+        }
+
+        // If we broke the loop, the strings are equal if they both point to \0
+        return *s1 == *s2;
+    }
+
+    const Ch* str_;
+};
+
+// Also need a hash specialization so that we can use it in unordered map
+RAPIDJSON_NAMESPACE_END
+namespace std {
+template <typename Ch>
+struct hash<::RAPIDJSON_NAMESPACE::StringView<Ch>> {
+    std::size_t operator()(const ::RAPIDJSON_NAMESPACE::StringView<Ch> &key) const {
+        // Use FNV hash since it's fast and easy to write and we don't want to pull in any external deps here.
+        const Ch* s = key.str_;
+        uint64_t hval = 0;
+        while (*s) {
+            /* multiply by the 64 bit FNV magic prime mod 2^64 */
+            hval += (hval << 1) + (hval << 4) + (hval << 5) +
+                    (hval << 7) + (hval << 8) + (hval << 40);
+            /* xor the bottom with the current octet */
+            hval ^= (uint64_t)*s++;
+        }
+        return hval;
+    }
+};
+}
+RAPIDJSON_NAMESPACE_BEGIN
+#endif
+
 ///////////////////////////////////////////////////////////////////////////////
 // GenericValue
 
@@ -574,8 +660,9 @@ public:
 
 #if RAPIDJSON_HAS_CXX11_RVALUE_REFS
     //! Move constructor in C++11
-    GenericValue(GenericValue&& rhs) RAPIDJSON_NOEXCEPT : data_(rhs.data_) {
+    GenericValue(GenericValue&& rhs) RAPIDJSON_NOEXCEPT : data_(rhs.data_), memberPtrsByName_(rhs.memberPtrsByName_) {
         rhs.data_.f.flags = kNullFlag; // give up contents
+        rhs.memberPtrsByName_ = nullptr; // we take ownership of the member lut
     }
 #endif
 
@@ -634,7 +721,7 @@ public:
                 }
                 data_.f.flags = kObjectFlag;
                 data_.o.size = data_.o.capacity = count;
-                SetMembersPointer(lm);
+                SetMembersPointer(lm, allocator);
             }
             break;
         case kArrayType: {
@@ -762,9 +849,10 @@ public:
         \note \c Object is always pass-by-value.
         \note the source object is moved into this value and the sourec object becomes empty.
     */
-    GenericValue(Object o) RAPIDJSON_NOEXCEPT : data_(o.value_.data_) {
+    GenericValue(Object o) RAPIDJSON_NOEXCEPT : data_(o.value_.data_), memberPtrsByName_(o.value_.memberPtrsByName_) {
         o.value_.data_ = Data();
         o.value_.data_.f.flags = kObjectFlag;
+        o.value_.memberPtrsByName_ = nullptr;
     }
 
     //! Destructor.
@@ -772,6 +860,12 @@ public:
     */
     ~GenericValue() {
         if (Allocator::kNeedFree) { // Shortcut by Allocator's trait
+            // Clear our member lookup table
+            if (memberPtrsByName_) {
+                memberPtrsByName_->~LutMap();
+                Allocator::Free(memberPtrsByName_);
+            }
+
             switch(data_.f.flags) {
             case kArrayFlag:
                 {
@@ -796,6 +890,9 @@ public:
                 break;  // Do nothing for other types.
             }
         }
+
+        // Always write back nullptr to the members ptr
+        memberPtrsByName_ = nullptr;
     }
 
     //@}
@@ -1150,7 +1247,8 @@ public:
     GenericValue& MemberReserve(SizeType newCapacity, Allocator &allocator) {
         RAPIDJSON_ASSERT(IsObject());
         if (newCapacity > data_.o.capacity) {
-            SetMembersPointer(reinterpret_cast<Member*>(allocator.Realloc(GetMembersPointer(), data_.o.capacity * sizeof(Member), newCapacity * sizeof(Member))));
+            SetMembersPointer(reinterpret_cast<Member*>(allocator.Realloc(GetMembersPointer(), data_.o.capacity * sizeof(Member), newCapacity * sizeof(Member))), allocator);
+
             data_.o.capacity = newCapacity;
         }
         return *this;
@@ -1226,11 +1324,19 @@ public:
     MemberIterator FindMember(const GenericValue<Encoding, SourceAllocator>& name) {
         RAPIDJSON_ASSERT(IsObject());
         RAPIDJSON_ASSERT(name.IsString());
-        MemberIterator member = MemberBegin();
-        for ( ; member != MemberEnd(); ++member)
-            if (name.StringEqual(member->name))
-                break;
-        return member;
+
+        // If the members pointer is null, we have no members, we will never find anything
+        if (!GetMembersPointer()) {
+            return MemberEnd();
+        }
+
+        // Use our cache map to look up this member
+        RAPIDJSON_ASSERT(!!memberPtrsByName_);
+        auto it = memberPtrsByName_->find(name.GetString());
+        if (it != memberPtrsByName_->end()) {
+            return MemberIterator(it->second);
+        }
+        return MemberEnd();
     }
     template <typename SourceAllocator> ConstMemberIterator FindMember(const GenericValue<Encoding, SourceAllocator>& name) const { return const_cast<GenericValue&>(*this).FindMember(name); }
 
@@ -1266,6 +1372,12 @@ public:
         Member* members = GetMembersPointer();
         members[o.size].name.RawAssign(name);
         members[o.size].value.RawAssign(value);
+
+        // Add this member to our lookup table.
+        // In the event of duplicate keys, first write wins. This emulates the linear seek behaviour of the old FindMember.
+        RAPIDJSON_ASSERT(!!memberPtrsByName_);
+        memberPtrsByName_->emplace(members[o.size].name.GetString(), &members[o.size]);
+
         o.size++;
         return *this;
     }
@@ -1403,6 +1515,7 @@ public:
         for (MemberIterator m = MemberBegin(); m != MemberEnd(); ++m)
             m->~Member();
         data_.o.size = 0;
+        memberPtrsByName_->clear();
     }
 
     //! Remove a member in object by its name.
@@ -1446,13 +1559,57 @@ public:
         RAPIDJSON_ASSERT(data_.o.size > 0);
         RAPIDJSON_ASSERT(GetMembersPointer() != 0);
         RAPIDJSON_ASSERT(m >= MemberBegin() && m < MemberEnd());
+        RAPIDJSON_ASSERT(!!memberPtrsByName_);
 
         MemberIterator last(GetMembersPointer() + (data_.o.size - 1));
-        if (data_.o.size > 1 && m != last)
+        if (data_.o.size > 1 && m != last) {
+            // Delete lookup value for old name IFF it pointed to the erased value
+            auto it = memberPtrsByName_->find(m->name.GetString());
+            bool didErase = false;
+            if (it->second == &*m) {
+                // This was previously the first hit for this key. Remove the entry.
+                memberPtrsByName_->erase(m->name.GetString());
+                didErase = true;
+            }
+
             *m = *last; // Move the last one to this place
-        else
-            m->~Member(); // Only one left, just destroy
-        --data_.o.size;
+
+            // Decrement the size to effectively delete the last element.
+            // We need to do this before we check for previously shadowed keys so that we ignore the swapped final element.
+            --data_.o.size;
+
+            // Point the swapped value at the correct location
+            (*memberPtrsByName_)[m->name.GetString()] = &*m;
+
+            // If we erased a key earlier, then in order to be compatible with objects with duplicated keys,
+            // we have to scan the remainder of the object and test if any other keys are emplacable now.
+            if (didErase) {
+                for (MemberIterator shadow = m; shadow < MemberEnd(); shadow++) {
+                    const auto& emplaceResult = memberPtrsByName_->emplace(shadow->name.GetString(), &*shadow);
+                    // If we did emplace a value, we must have re-filled a previously shadowed name.
+                    // Since there should only ever be one key that is unshadowed after a single delete, if we see this happen, we can short circuit checking the rest of the object.
+                    if (emplaceResult.second) {
+                        break;
+                    }
+                }
+            }
+        }
+        else {
+            // If this is the leading key for a name, delete it.
+            // We don't need to check successors since
+            // - If this is the last key there can't be any successors, and
+            // - If this is the only key there are no other members to shadow
+            auto it = memberPtrsByName_->find(m->name.GetString());
+            if (it->second == &*m) {
+                memberPtrsByName_->erase(m->name.GetString());
+            }
+
+            // Data to erase is either the only element or the final element.
+            // We can just destruct the element, and decreasing the size of the object will effectively drop it.
+            m->~Member();
+            --data_.o.size;
+        }
+
         return m;
     }
 
@@ -1485,12 +1642,38 @@ public:
         RAPIDJSON_ASSERT(first >= MemberBegin());
         RAPIDJSON_ASSERT(first <= last);
         RAPIDJSON_ASSERT(last <= MemberEnd());
+        RAPIDJSON_ASSERT(!!memberPtrsByName_);
 
         MemberIterator pos = MemberBegin() + (first - MemberBegin());
-        for (MemberIterator itr = pos; itr != last; ++itr)
+
+        // Erase all lookup entries from the start member to the end of the object.
+        // Since we only store string references in our lookup table, and memmove'ing the members rearranges those referents if they are short strings, we need to perform this step early.
+        for (MemberIterator itr = pos; itr != MemberEnd(); ++itr) {
+            // Only erase if the lookup value for this member matches the pointer address.
+            // If we have duplocate keys, and the first occurrence is before the erase, we want to leave it be.
+            auto it = memberPtrsByName_->find(itr->name.GetString());
+            if (it->second == &*itr) {
+                memberPtrsByName_->erase(it);
+            }
+        }
+
+        // Now go through and deconstruct all objects within the erased slice
+        for (MemberIterator itr = pos; itr != last; ++itr) {
+            // Deconstruct the deleted member
             itr->~Member();
+        }
+
+        // Move any following members down to keep member array contiguous
         std::memmove(&*pos, &*last, static_cast<size_t>(MemberEnd() - last) * sizeof(Member));
+
         data_.o.size -= static_cast<SizeType>(last - first);
+
+        // Update the LUT pointers for all members that got moved.
+        // Use emplace to preserve first-write-wins ordering.
+        for (MemberIterator itr = pos; itr != MemberEnd(); ++itr) {
+            memberPtrsByName_->emplace(itr->name.GetString(), &*itr);
+        }
+
         return pos;
     }
 
@@ -2000,7 +2183,38 @@ private:
     RAPIDJSON_FORCEINLINE GenericValue* GetElementsPointer() const { return RAPIDJSON_GETPOINTER(GenericValue, data_.a.elements); }
     RAPIDJSON_FORCEINLINE GenericValue* SetElementsPointer(GenericValue* elements) { return RAPIDJSON_SETPOINTER(GenericValue, data_.a.elements, elements); }
     RAPIDJSON_FORCEINLINE Member* GetMembersPointer() const { return RAPIDJSON_GETPOINTER(Member, data_.o.members); }
-    RAPIDJSON_FORCEINLINE Member* SetMembersPointer(Member* members) { return RAPIDJSON_SETPOINTER(Member, data_.o.members, members); }
+    RAPIDJSON_FORCEINLINE Member* SetMembersPointer(Member* members, Allocator& allocator) {
+        Member* const ret = RAPIDJSON_SETPOINTER(Member, data_.o.members, members);
+
+        // If the members pointer is invalid, destroy the member cache if it exists
+        if (!members) {
+            if (Allocator::kNeedFree && !!memberPtrsByName_) {
+                memberPtrsByName_->~LutMap();
+                Allocator::Free(memberPtrsByName_);
+                memberPtrsByName_ = nullptr;
+            }
+            return ret;
+        }
+
+        // If the members pointer _is_ valid, and we don't have a lookup table allocated, create one now
+        if (!memberPtrsByName_) {
+            memberPtrsByName_ = static_cast<LutMap*>(allocator.Malloc(sizeof(LutMap)));
+            new (memberPtrsByName_) LutMap(LutMapAllocator{&allocator});
+        }
+
+        // If we already had a map, clear it since the members have been realloced and their addresses have changed
+        else {
+            memberPtrsByName_->clear();
+        }
+
+        // Rebuild LUT based on new member addresses
+        // Note that we iterate the input pointer _not_ the member pointer, since the member pointer may be munged by the 48 bit pointer optimization
+        for (SizeType i = 0; i < data_.o.size; i++) {
+            memberPtrsByName_->emplace(members[i].name.GetString(), &members[i]);
+        }
+
+        return ret;
+    }
 
     // Initialize this value as array with initial data, without calling destructor.
     void SetArrayRaw(GenericValue* values, SizeType count, Allocator& allocator) {
@@ -2018,14 +2232,14 @@ private:
     //! Initialize this value as object with initial data, without calling destructor.
     void SetObjectRaw(Member* members, SizeType count, Allocator& allocator) {
         data_.f.flags = kObjectFlag;
+        data_.o.size = data_.o.capacity = count;
         if (count) {
             Member* m = static_cast<Member*>(allocator.Malloc(count * sizeof(Member)));
-            SetMembersPointer(m);
             std::memcpy(m, members, count * sizeof(Member));
+            SetMembersPointer(m, allocator);
         }
         else
-            SetMembersPointer(0);
-        data_.o.size = data_.o.capacity = count;
+            SetMembersPointer(0, allocator);
     }
 
     //! Initialize this value as constant string, without calling destructor.
@@ -2057,6 +2271,10 @@ private:
         data_ = rhs.data_;
         // data_.f.flags = rhs.data_.f.flags;
         rhs.data_.f.flags = kNullFlag;
+
+        // Take ownership of the RHS's member lut
+        memberPtrsByName_ = rhs.memberPtrsByName_;
+        rhs.memberPtrsByName_ = nullptr;
     }
 
     template <typename SourceAllocator>
@@ -2076,6 +2294,17 @@ private:
     }
 
     Data data_;
+
+#if __cplusplus >= 201703L
+    using LutMapKey = std::basic_string_view<Ch>;
+#else
+    using LutMapKey = StringView<Ch>;
+#endif
+    using LutMapValue = Member*;
+    using LutMapTuple = std::pair<const LutMapKey, LutMapValue>;
+    using LutMapAllocator = CxxAllocatorWrapper<LutMapTuple, Allocator>;
+    using LutMap = std::unordered_map<LutMapKey, LutMapValue, std::hash<LutMapKey>, std::equal_to<LutMapKey>, LutMapAllocator>;
+    LutMap* memberPtrsByName_ = nullptr;
 };
 
 //! GenericValue with UTF8 encoding
