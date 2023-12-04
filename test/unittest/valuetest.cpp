@@ -1403,6 +1403,7 @@ static void TestObject(T& x, Allocator& allocator) {
         size_t i = static_cast<size_t>((itr - x.MemberBegin())) + 1;
         EXPECT_STREQ(itr->name.GetString(), keys[i]);
         EXPECT_EQ(i, itr->value[0].GetInt());
+        EXPECT_EQ(itr, x.FindMember(itr->name.GetString()));
     }
 
     // Erase the last
@@ -1414,6 +1415,7 @@ static void TestObject(T& x, Allocator& allocator) {
         size_t i = static_cast<size_t>(itr - x.MemberBegin()) + 1;
         EXPECT_STREQ(itr->name.GetString(), keys[i]);
         EXPECT_EQ(i, itr->value[0].GetInt());
+        EXPECT_EQ(itr, x.FindMember(itr->name.GetString()));
     }
 
     // Erase the middle
@@ -1426,6 +1428,7 @@ static void TestObject(T& x, Allocator& allocator) {
         i += (i < 4) ? 1 : 2;
         EXPECT_STREQ(itr->name.GetString(), keys[i]);
         EXPECT_EQ(i, itr->value[0].GetInt());
+        EXPECT_EQ(itr, x.FindMember(itr->name.GetString()));
     }
 
     // EraseMember(ConstMemberIterator, ConstMemberIterator)
