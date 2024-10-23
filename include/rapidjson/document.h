@@ -1108,7 +1108,15 @@ public:
         if (member != MemberEnd())
             return member->value;
         else {
-            RAPIDJSON_ASSERT(false);    // see above note
+#ifdef RAPIDJSON_ASSERT_MSG
+            static const char* const ASSERT_MESSAGE = "cannot find member %s";
+            const size_t assertBufferSize = strlen(ASSERT_MESSAGE) + name.GetStringLength() + 1;
+            char assertBuffer[assertBufferSize];
+            snprintf(assertBuffer, assertBufferSize, ASSERT_MESSAGE, name.GetString());
+            RAPIDJSON_ASSERT_MSG(false, assertBuffer); // see above note
+#else
+            RAPIDJSON_ASSERT(false); // see above note
+#endif
 
             // This will generate -Wexit-time-destructors in clang
             // static GenericValue NullValue;
