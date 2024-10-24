@@ -1109,7 +1109,7 @@ public:
             return member->value;
         else {
 #ifdef RAPIDJSON_ASSERT_MSG
-            static const char* const ASSERT_MESSAGE = "cannot find member %s";
+            static const char* const ASSERT_MESSAGE = "cannot find member '%s'";
             const size_t assertBufferSize = strlen(ASSERT_MESSAGE) + name.GetStringLength() + 1;
             char assertBuffer[assertBufferSize];
             snprintf(assertBuffer, assertBufferSize, ASSERT_MESSAGE, name.GetString());
