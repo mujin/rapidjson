@@ -698,7 +698,7 @@ public:
 
 private:
     //! Copy constructor is not permitted.
-    GenericValue(const GenericValue& rhs);
+    GenericValue(const GenericValue& rhs) = delete;
 
 #if RAPIDJSON_HAS_CXX11_RVALUE_REFS
     //! Moving from a GenericDocument is not permitted.
