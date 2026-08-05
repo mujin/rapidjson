@@ -41,6 +41,7 @@ option(RAPIDJSON_HAS_STDSTRING "" OFF)
 if(RAPIDJSON_HAS_STDSTRING)
     add_definitions(-DRAPIDJSON_HAS_STDSTRING)
 endif()
+option(RAPIDJSON_AUTOENABLE_SIMD "Auto-enable SIMD optimization based on information from the compiler" ON)
 
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
@@ -124,7 +125,10 @@ ELSEIF(WIN32)
 ENDIF()
 SET(CMAKE_INSTALL_DIR "${_CMAKE_INSTALL_DIR}" CACHE PATH "The directory cmake fiels are installed in")
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/include/rapidjson/rapidjson.h.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rapidjson/rapidjson.h")
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/rapidjson/rapidjson.h DESTINATION ${INCLUDE_INSTALL_DIR}/rapidjson COMPONENT dev)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/include)
 
 if(RAPIDJSON_BUILD_DOC)
     add_subdirectory(doc)
