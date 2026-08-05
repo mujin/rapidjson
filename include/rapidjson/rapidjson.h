@@ -39,6 +39,8 @@
 #include <cstdlib>  // malloc(), realloc(), free(), size_t
 #include <cstring>  // memset(), memcpy(), memmove(), memcmp()
 
+#include "rapidjson/config.h"
+
 ///////////////////////////////////////////////////////////////////////////////
 // RAPIDJSON_VERSION_STRING
 //
@@ -354,7 +356,6 @@
     \c RAPIDJSON_SIMD to indicate the availability of the optimized code.
 */
 /* __SSE2__ and __SSE4_2__ are recognized by gcc, clang, and the Intel compiler. */
-#cmakedefine01 RAPIDJSON_AUTOENABLE_SIMD
 #if RAPIDJSON_AUTOENABLE_SIMD
 #  if defined(__SSE4_2__)
 #    define RAPIDJSON_SSE42

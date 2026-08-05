@@ -1,0 +1,9 @@
+// Generated from config.h.in by CMake
+#ifndef RAPIDJSON_CONFIG_H_
+#define RAPIDJSON_CONFIG_H_
+
+#ifndef RAPIDJSON_AUTOENABLE_SIMD
+#cmakedefine01 RAPIDJSON_AUTOENABLE_SIMD
+#endif
+
+#endif // RAPIDJSON_CONFIG_H_

@@ -125,8 +125,8 @@ ELSEIF(WIN32)
 ENDIF()
 SET(CMAKE_INSTALL_DIR "${_CMAKE_INSTALL_DIR}" CACHE PATH "The directory cmake fiels are installed in")
 
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/include/rapidjson/rapidjson.h.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rapidjson/rapidjson.h")
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/rapidjson/rapidjson.h DESTINATION ${INCLUDE_INSTALL_DIR}/rapidjson COMPONENT dev)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/include/rapidjson/config.h.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rapidjson/config.h")
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/rapidjson/config.h DESTINATION ${INCLUDE_INSTALL_DIR}/rapidjson COMPONENT dev)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/include)
 
@@ -168,11 +168,16 @@ install(FILES readme.md
 # Add an interface target to export it
 add_library(RapidJSON INTERFACE)
 
-target_include_directories(RapidJSON INTERFACE $<INSTALL_INTERFACE:include>)
+target_include_directories(RapidJSON INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
 
 install(DIRECTORY include/rapidjson
     DESTINATION "${INCLUDE_INSTALL_DIR}"
-    COMPONENT dev)
+    COMPONENT dev
+    # config.h is installed from the build tree by the configure_file above.
+    PATTERN "*.in" EXCLUDE)
 
 install(DIRECTORY example/
     DESTINATION "${DOC_INSTALL_DIR}/examples"
