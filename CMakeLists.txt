@@ -194,9 +194,10 @@ install(DIRECTORY example/
 ################################################################################
 # Export package for use from the build tree
 EXPORT( PACKAGE ${PROJECT_NAME} )
+EXPORT( TARGETS ${PROJECT_NAME}
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-targets.cmake" )
 
 # Create the RapidJSONConfig.cmake file for other cmake projects.
-INCLUDE(CMakePackageConfigHelpers)
 CONFIGURE_FILE( ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}Config.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake @ONLY )
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}ConfigVersion.cmake.in
@@ -210,6 +211,8 @@ IF(CMAKE_INSTALL_DIR)
         DESTINATION "${CMAKE_INSTALL_DIR}"
         COMPONENT dev)
 
-    INSTALL(TARGETS RapidJSON EXPORT RapidJSON-targets)
-    INSTALL(EXPORT RapidJSON-targets DESTINATION ${CMAKE_INSTALL_DIR})
+    INSTALL(TARGETS ${PROJECT_NAME} EXPORT ${PROJECT_NAME}-targets)
+    INSTALL(EXPORT ${PROJECT_NAME}-targets
+        DESTINATION "${CMAKE_INSTALL_DIR}"
+        COMPONENT dev)
 ENDIF()
