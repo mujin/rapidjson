@@ -39,6 +39,8 @@
 #include <cstdlib>  // malloc(), realloc(), free(), size_t
 #include <cstring>  // memset(), memcpy(), memmove(), memcmp()
 
+#include "rapidjson/config.h"
+
 ///////////////////////////////////////////////////////////////////////////////
 // RAPIDJSON_VERSION_STRING
 //
@@ -353,6 +355,17 @@
     If any of these symbols is defined, RapidJSON defines the macro
     \c RAPIDJSON_SIMD to indicate the availability of the optimized code.
 */
+/* __SSE2__ and __SSE4_2__ are recognized by gcc, clang, and the Intel compiler. */
+#if RAPIDJSON_AUTOENABLE_SIMD
+#  if defined(__SSE4_2__)
+#    define RAPIDJSON_SSE42
+#  elif defined(__SSE2__)
+#    define RAPIDJSON_SSE2
+#  elif defined(__ARM_NEON)
+#    define RAPIDJSON_NEON
+#  endif
+#endif
+
 #if defined(RAPIDJSON_SSE2) || defined(RAPIDJSON_SSE42) \
     || defined(RAPIDJSON_NEON) || defined(RAPIDJSON_DOXYGEN_RUNNING)
 #define RAPIDJSON_SIMD

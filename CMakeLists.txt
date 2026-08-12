@@ -41,6 +41,7 @@ option(RAPIDJSON_HAS_STDSTRING "" OFF)
 if(RAPIDJSON_HAS_STDSTRING)
     add_definitions(-DRAPIDJSON_HAS_STDSTRING)
 endif()
+option(RAPIDJSON_AUTOENABLE_SIMD "Auto-enable SIMD optimization based on information from the compiler" ON)
 
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
@@ -124,7 +125,10 @@ ELSEIF(WIN32)
 ENDIF()
 SET(CMAKE_INSTALL_DIR "${_CMAKE_INSTALL_DIR}" CACHE PATH "The directory cmake fiels are installed in")
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/include/rapidjson/config.h.in" "${CMAKE_CURRENT_BINARY_DIR}/include/rapidjson/config.h")
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/rapidjson/config.h DESTINATION ${INCLUDE_INSTALL_DIR}/rapidjson COMPONENT dev)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/include)
 
 if(RAPIDJSON_BUILD_DOC)
     add_subdirectory(doc)
@@ -161,9 +165,19 @@ install(FILES readme.md
         DESTINATION "${DOC_INSTALL_DIR}"
         COMPONENT doc)
 
+# Add an interface target to export it
+add_library(RapidJSON INTERFACE)
+
+target_include_directories(RapidJSON INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+
 install(DIRECTORY include/rapidjson
     DESTINATION "${INCLUDE_INSTALL_DIR}"
-    COMPONENT dev)
+    COMPONENT dev
+    # config.h is installed from the build tree by the configure_file above.
+    PATTERN "*.in" EXCLUDE)
 
 install(DIRECTORY example/
     DESTINATION "${DOC_INSTALL_DIR}/examples"
@@ -187,15 +201,16 @@ SET( CONFIG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 SET( CONFIG_DIR ${CMAKE_CURRENT_BINARY_DIR})
 SET( ${PROJECT_NAME}_INCLUDE_DIR "\${${PROJECT_NAME}_SOURCE_DIR}/include" )
 
+INCLUDE(CMakePackageConfigHelpers)
 CONFIGURE_FILE( ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}Config.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake @ONLY )
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}ConfigVersion.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake @ONLY)
 
 # ... for the install tree
-SET( CMAKECONFIG_INSTALL_DIR lib/cmake/${PROJECT_NAME} )
+SET( CMAKECONFIG_INSTALL_DIR ${LIB_INSTALL_DIR}/cmake/${PROJECT_NAME} )
 FILE( RELATIVE_PATH REL_INCLUDE_DIR
-    "${CMAKE_INSTALL_PREFIX}/${CMAKECONFIG_INSTALL_DIR}"
+    "${CMAKECONFIG_INSTALL_DIR}"
     "${CMAKE_INSTALL_PREFIX}/include" )
 
 SET( ${PROJECT_NAME}_INCLUDE_DIR "\${${PROJECT_NAME}_CMAKE_DIR}/${REL_INCLUDE_DIR}" )
@@ -208,8 +223,13 @@ INSTALL(FILES "${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${PROJECT_NAM
         DESTINATION ${CMAKECONFIG_INSTALL_DIR} )
 
 # Install files
-INSTALL(FILES
-    ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
-    ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake
-    DESTINATION "${CMAKE_INSTALL_DIR}"
-    COMPONENT dev)
+IF(CMAKE_INSTALL_DIR)
+    INSTALL(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake
+        DESTINATION "${CMAKE_INSTALL_DIR}"
+        COMPONENT dev)
+
+    INSTALL(TARGETS RapidJSON EXPORT RapidJSON-targets)
+    INSTALL(EXPORT RapidJSON-targets DESTINATION ${CMAKE_INSTALL_DIR})
+ENDIF()
