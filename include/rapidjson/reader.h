@@ -1113,6 +1113,82 @@ private:
         is.src_ = p;
     }
 
+    // EncodedInputStream<UTF8<>, MemoryStream> -> StackStream<char>
+    // MemoryStream carries an explicit end pointer, so this scan is bounded by that instead of by
+    // the NUL sentinel the StringStream overload relies on, and never loads beyond the buffer.
+    // Without it, Document::Parse(str, length) and Reader::Parse over a MemoryStream have no way to reach the vectorized path, because the generic template below is a no-op.
+    static RAPIDJSON_FORCEINLINE void ScanCopyUnescapedString(EncodedInputStream<UTF8<>, MemoryStream>& is, StackStream<char>& os) {
+        const char* p = is.is_.src_;
+        const char* const end = is.is_.end_;
+
+        // Scan one by one until alignment (unaligned load may cross page boundary and cause crash).
+        // Stopping early when the stream ends before the next alignment boundary.
+        const char* nextAligned = reinterpret_cast<const char*>((reinterpret_cast<size_t>(p) + 15) & static_cast<size_t>(~15));
+        if (nextAligned > end)
+            nextAligned = end;
+        while (p != nextAligned)
+            if (RAPIDJSON_UNLIKELY(*p == '\"') || RAPIDJSON_UNLIKELY(*p == '\\') || RAPIDJSON_UNLIKELY(static_cast<unsigned>(*p) < 0x20)) {
+                is.is_.src_ = p;
+                return;
+            }
+            else
+                os.Put(*p++);
+
+        // The bulk of the string using SIMD, over whole 16 byte blocks only.
+        static const char dquote[16] = { '\"', '\"', '\"', '\"', '\"', '\"', '\"', '\"', '\"', '\"', '\"', '\"', '\"', '\"', '\"', '\"' };
+        static const char bslash[16] = { '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\' };
+        static const char space[16]  = { 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F };
+        const __m128i dq = _mm_loadu_si128(reinterpret_cast<const __m128i *>(&dquote[0]));
+        const __m128i bs = _mm_loadu_si128(reinterpret_cast<const __m128i *>(&bslash[0]));
+        const __m128i sp = _mm_loadu_si128(reinterpret_cast<const __m128i *>(&space[0]));
+
+        // Since we know the end pointer, use the (aligned) end as a termination condition
+        const char* const endAligned = p + (static_cast<size_t>(end - p) & ~static_cast<size_t>(15));
+        for (; p != endAligned; p += 16) {
+            // Load next block of source data
+            const __m128i s = _mm_load_si128(reinterpret_cast<const __m128i *>(p));
+            // Test each byte against quotes / backslashes, which would end a string or otherwise need special handling
+            const __m128i t1 = _mm_cmpeq_epi8(s, dq);
+            const __m128i t2 = _mm_cmpeq_epi8(s, bs);
+            // Treat all characters < 0x20 (space) the same - any control character should terminate
+            // First take the max of each (source data, 0x1F) pair, then compare that against our space array.
+            const __m128i t3 = _mm_cmpeq_epi8(_mm_max_epu8(s, sp), sp);
+            // OR all of our test vectors together, since we just want to know if _any_ were hit.
+            const __m128i x = _mm_or_si128(_mm_or_si128(t1, t2), t3);
+            // Fold all of the high bits (any set value is 0xFF) down into a byte
+            unsigned short r = static_cast<unsigned short>(_mm_movemask_epi8(x));
+            if (RAPIDJSON_UNLIKELY(r != 0)) {   // some of characters is escaped
+                SizeType length;
+#ifdef _MSC_VER         // Find the index of first escaped
+                unsigned long offset;
+                _BitScanForward(&offset, r);
+                length = offset;
+#else
+                length = static_cast<SizeType>(__builtin_ffs(r) - 1);
+#endif
+                if (length != 0) {
+                    char* q = reinterpret_cast<char*>(os.Push(length));
+                    for (size_t i = 0; i < length; i++)
+                        q[i] = p[i];
+
+                    p += length;
+                }
+                is.is_.src_ = p;
+                return;
+            }
+            _mm_storeu_si128(reinterpret_cast<__m128i *>(os.Push(16)), s);
+        }
+
+        // The trailing bytes that do not fill a whole block.
+        while (p != end) {
+            if (RAPIDJSON_UNLIKELY(*p == '\"') || RAPIDJSON_UNLIKELY(*p == '\\') || RAPIDJSON_UNLIKELY(static_cast<unsigned>(*p) < 0x20))
+                break;
+            os.Put(*p++);
+        }
+
+        is.is_.src_ = p;
+    }
+
     // InsituStringStream -> InsituStringStream
     static RAPIDJSON_FORCEINLINE void ScanCopyUnescapedString(InsituStringStream& is, InsituStringStream& os) {
         RAPIDJSON_ASSERT(&is == &os);
